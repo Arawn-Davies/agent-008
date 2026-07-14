@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Before loading this, replace every /Users/YOURNAME below with your actual
+  home directory (launchd plists don't expand ~ or $HOME), and confirm the
+  rbenv ruby path with: rbenv which ruby
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.agentim.serve</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOURNAME/.rbenv/shims/ruby</string>
+    <string>/Users/YOURNAME/agent-008/bin/agent_im</string>
+    <string>serve</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/YOURNAME/.agent_im/serve.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOURNAME/.agent_im/serve.log</string>
+</dict>
+</plist>
