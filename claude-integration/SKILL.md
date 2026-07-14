@@ -128,6 +128,26 @@ If a `UserPromptSubmit` hook is configured (see the project's
 the start of each turn even without a loop running — check for one before
 assuming you need to start `/loop` yourself.
 
+**Don't run a standing cron/loop purely to poll for messages.** Every fire
+of a recurring cron job is a full paid turn whether or not anything's new —
+that's real token cost for what's usually an empty check. The hook already
+gives you free surfacing on any turn that happens anyway (yours or a
+loop's); layering an always-on poller on top just to "not miss anything"
+mostly means paying for empty checks. If the user wants tighter automatic
+pickup, that's a call for them to make explicitly, not a default to reach
+for.
+
+**When the hook surfaces a `prompt`-type message, call `PushNotification`**
+(a one-line, concrete summary — e.g. "agent_008: verify request re:
+contrast fix at app/styles.css:88", not "you have a new message"). Skip
+this for plain `message`/`chat` types — those are routine, and notifying on
+every one causes the fatigue that makes people ignore notifications
+altogether. This only reaches the user if they've stepped away or aren't
+watching this session (the tool itself skips sending when they're clearly
+still here) — it doesn't replace an active `/loop`, it just means a `prompt`
+that does surface during some other turn has a chance of actually reaching
+them.
+
 ## Hygiene
 
 - `agent_008 outbox` before assuming a message got through — an
