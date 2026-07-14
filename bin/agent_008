@@ -25,6 +25,9 @@ require "optparse"
 require "fileutils"
 require "securerandom"
 
+$stdout.sync = true
+$stderr.sync = true
+
 CONFIG_DIR = File.join(Dir.home, ".agent_008")
 CONFIG_FILE = File.join(CONFIG_DIR, "config.json")
 INBOX_FILE = File.join(CONFIG_DIR, "inbox.jsonl")
