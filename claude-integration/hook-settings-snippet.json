@@ -5,9 +5,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$HOME/agent-008/bin/agent_im_hook.py\" 2>/dev/null",
+            "command": "python3 \"$HOME/agent-008/bin/agent_008_hook.py\" 2>/dev/null",
             "timeout": 10,
-            "statusMessage": "Checking agent_im inbox..."
+            "statusMessage": "Checking agent_008 inbox..."
           }
         ]
       }

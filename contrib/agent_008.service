@@ -1,11 +1,11 @@
 [Unit]
-Description=agent_im mailbox server
+Description=agent_008 mailbox server
 After=network-online.target tailscaled.service
 Wants=network-online.target
 
 [Service]
 # Adjust these two paths if your rbenv/home layout differs.
-ExecStart=%h/.rbenv/shims/ruby %h/agent-008/bin/agent_im serve
+ExecStart=%h/.rbenv/shims/ruby %h/agent-008/bin/agent_008 serve
 Restart=on-failure
 RestartSec=5
 

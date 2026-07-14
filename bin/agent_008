@@ -1,10 +1,16 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# agent_im — a tiny instant messenger for two Claude Code agents, tunneled
+# agent_008 — a tiny instant messenger for two Claude Code agents, tunneled
 # over Tailscale. No third-party service in the loop: `serve` listens only
 # on your Tailscale IP, `send` POSTs straight to the peer's Tailscale IP,
 # and `recv`/`watch` just poll the local inbox that `serve` filled in.
+#
+# Two layers of defense: the server only binds to your Tailscale IP (so
+# nothing off the tailnet can reach it), and every request must carry a
+# shared token the two of you exchanged out of band (so if your tailnet
+# ever has more than the two of you on it, network reachability alone
+# isn't enough to send you messages).
 #
 # Delivery is at-least-once and ordered: every message gets a unique id;
 # `send` queues to a local outbox and retries (via `flush` or `watch`) if
@@ -19,7 +25,7 @@ require "optparse"
 require "fileutils"
 require "securerandom"
 
-CONFIG_DIR = File.join(Dir.home, ".agent_im")
+CONFIG_DIR = File.join(Dir.home, ".agent_008")
 CONFIG_FILE = File.join(CONFIG_DIR, "config.json")
 INBOX_FILE = File.join(CONFIG_DIR, "inbox.jsonl")
 OUTBOX_FILE = File.join(CONFIG_DIR, "outbox.jsonl")
@@ -28,12 +34,12 @@ DEFAULT_PORT = 8420
 TYPES = %w[message patch prompt chat].freeze
 
 def die(msg)
-  warn "agent_im: #{msg}"
+  warn "agent_008: #{msg}"
   exit 1
 end
 
 def load_config
-  die "not initialized — run: agent_im init --peer <host>[:port]" unless File.exist?(CONFIG_FILE)
+  die "not initialized — run: agent_008 init --peer <host>[:port]" unless File.exist?(CONFIG_FILE)
   JSON.parse(File.read(CONFIG_FILE))
 end
 
@@ -43,7 +49,7 @@ def save_config(cfg)
 end
 
 def default_name
-  ENV["AGENT_IM_NAME"] || (`whoami`.strip rescue nil) || "unknown"
+  ENV["AGENT_008_NAME"] || (`whoami`.strip rescue nil) || "unknown"
 end
 
 def tailscale_ip
@@ -59,21 +65,33 @@ def cmd_init(args)
     o.on("--peer HOST") { |v| opts[:peer] = v }
     o.on("--port N", Integer) { |v| opts[:port] = v }
     o.on("--name NAME") { |v| opts[:name] = v }
+    o.on("--token TOKEN") { |v| opts[:token] = v }
   end.parse!(args)
 
-  die "--peer is required, e.g. agent_im init --peer 100.x.y.z:8420" unless opts[:peer]
+  die "--peer is required, e.g. agent_008 init --peer 100.x.y.z:8420" unless opts[:peer]
   opts[:peer] = "#{opts[:peer]}:#{DEFAULT_PORT}" unless opts[:peer].include?(":")
 
-  save_config("peer" => opts[:peer], "port" => opts[:port], "name" => opts[:name])
+  token = opts[:token] || SecureRandom.hex(24)
+  save_config("peer" => opts[:peer], "port" => opts[:port], "name" => opts[:name], "token" => token)
   FileUtils.touch(INBOX_FILE) unless File.exist?(INBOX_FILE)
   FileUtils.touch(OUTBOX_FILE) unless File.exist?(OUTBOX_FILE)
   FileUtils.touch(STATE_FILE) unless File.exist?(STATE_FILE)
-  puts "agent_im initialized: name=#{opts[:name]} peer=#{opts[:peer]} local_port=#{opts[:port]}"
+
+  puts "agent_008 initialized: name=#{opts[:name]} peer=#{opts[:peer]} local_port=#{opts[:port]}"
+  if opts[:token]
+    puts "using the token you provided"
+  else
+    puts "generated a new token — share it with your peer out of band (same channel as your"
+    puts "Tailscale IP, not over agent_008 itself before both sides are configured):"
+    puts "  #{token}"
+    puts "they need to run: agent_008 init --peer <your-ip> --name <theirs> --token #{token}"
+  end
 end
 
 # --- serve ------------------------------------------------------------------
 # Minimal hand-rolled HTTP/1.1 server (stdlib only — no webrick dependency).
-# One endpoint that matters: POST /send with a JSON envelope.
+# One endpoint that matters: POST /send with a JSON envelope, guarded by the
+# shared token in the Authorization header.
 
 def read_http_request(socket)
   request_line = socket.gets
@@ -93,7 +111,7 @@ def read_http_request(socket)
 end
 
 def write_http_response(socket, status, body)
-  reason = { 200 => "OK", 400 => "Bad Request", 404 => "Not Found", 500 => "Internal Server Error" }[status] || "OK"
+  reason = { 200 => "OK", 400 => "Bad Request", 401 => "Unauthorized", 404 => "Not Found", 500 => "Internal Server Error" }[status] || "OK"
   socket.write("HTTP/1.1 #{status} #{reason}\r\n")
   socket.write("Content-Type: application/json\r\n")
   socket.write("Content-Length: #{body.bytesize}\r\n")
@@ -119,6 +137,13 @@ def load_seen_ids
   seen
 end
 
+def authorized?(req, token)
+  auth = req[:headers]["authorization"]
+  return false unless auth
+
+  auth == "Bearer #{token}"
+end
+
 def cmd_serve(args)
   cfg = load_config
   opts = { port: cfg["port"] || DEFAULT_PORT, bind: nil }
@@ -127,15 +152,17 @@ def cmd_serve(args)
     o.on("--bind IP") { |v| opts[:bind] = v }
   end.parse!(args)
 
+  die "no token in config — re-run: agent_008 init --peer <host> --token <shared-secret>" unless cfg["token"]
+
   bind_ip = opts[:bind] || tailscale_ip
   die "couldn't determine a Tailscale IP (is `tailscale up` running?) — pass one explicitly with --bind <ip>" unless bind_ip
 
   seen_ids = load_seen_ids
   server = TCPServer.new(bind_ip, opts[:port])
-  puts "agent_im serve: listening on #{bind_ip}:#{opts[:port]} (Tailscale-only) as '#{cfg["name"]}' (peer: #{cfg["peer"]})"
+  puts "agent_008 serve: listening on #{bind_ip}:#{opts[:port]} (Tailscale-only, token-checked) as '#{cfg["name"]}' (peer: #{cfg["peer"]})"
   puts "  (Ctrl+C to stop — leave this running, or start it via nohup/tmux/a service — see contrib/)"
 
-  trap("INT") { puts "\nagent_im serve: stopping"; exit 0 }
+  trap("INT") { puts "\nagent_008 serve: stopping"; exit 0 }
 
   loop do
     client = server.accept
@@ -144,6 +171,12 @@ def cmd_serve(args)
       next unless req
 
       if req[:method] == "POST" && req[:path] == "/send"
+        unless authorized?(req, cfg["token"])
+          warn "agent_008 serve: rejected unauthorized request from #{client.peeraddr(false)[3]}"
+          write_http_response(client, 401, { error: "unauthorized" }.to_json)
+          next
+        end
+
         payload = JSON.parse(req[:body])
         id = payload["id"] || SecureRandom.uuid
 
@@ -169,7 +202,7 @@ def cmd_serve(args)
         write_http_response(client, 404, { error: "not found" }.to_json)
       end
     rescue StandardError => e
-      warn "agent_im serve: error handling request: #{e.message}"
+      warn "agent_008 serve: error handling request: #{e.message}"
       begin
         write_http_response(client, 500, { error: e.message }.to_json)
       rescue StandardError
@@ -183,16 +216,19 @@ end
 
 # --- delivery (shared by send / flush / watch) -------------------------------
 
-def deliver(envelope, peer)
+def deliver(envelope, peer, token)
   host, port = peer.split(":")
   port ||= DEFAULT_PORT
   uri = URI("http://#{host}:#{port}/send")
   res = Net::HTTP.start(uri.host, uri.port, open_timeout: 5, read_timeout: 5) do |http|
-    req = Net::HTTP::Post.new(uri.path, "Content-Type" => "application/json")
+    req = Net::HTTP::Post.new(uri.path, "Content-Type" => "application/json", "Authorization" => "Bearer #{token}")
     req.body = envelope.to_json
     http.request(req)
   end
-  res.code.to_i == 200
+  return true if res.code.to_i == 200
+  die "peer rejected our token (401) — confirm both sides ran `init` with the same --token" if res.code.to_i == 401
+
+  false
 rescue StandardError
   false
 end
@@ -204,7 +240,7 @@ end
 
 # Delivers queued messages in order, stopping at the first failure (so a
 # down peer doesn't reorder delivery). Returns the number successfully sent.
-def flush_outbox(peer, quiet: false)
+def flush_outbox(peer, token, quiet: false)
   lines = File.exist?(OUTBOX_FILE) ? File.readlines(OUTBOX_FILE) : []
   return 0 if lines.empty?
 
@@ -212,7 +248,7 @@ def flush_outbox(peer, quiet: false)
   delivered = 0
   lines.each do |line|
     envelope = JSON.parse(line)
-    if remaining.empty? && deliver(envelope, peer)
+    if remaining.empty? && deliver(envelope, peer, token)
       delivered += 1
       puts "flushed queued (#{envelope["type"]}) [#{envelope["id"]}]" unless quiet
     else
@@ -237,7 +273,7 @@ def cmd_send(args)
     o.on("--patch FILE") { |v| patch_file = v; type = "patch" }
     o.on("--diff") { use_diff = true; type = "patch" }
   end.parse!(args)
-  die "no peer configured — run: agent_im init --peer <host>[:port]" unless peer
+  die "no peer configured — run: agent_008 init --peer <host>[:port]" unless peer
 
   body =
     if patch_file
@@ -252,7 +288,7 @@ def cmd_send(args)
     else
       args.join(" ")
     end
-  die "empty message — pass text, pipe stdin (agent_im send -), or use --patch/--diff" if body.nil? || body.strip.empty?
+  die "empty message — pass text, pipe stdin (agent_008 send -), or use --patch/--diff" if body.nil? || body.strip.empty?
 
   envelope = {
     "id" => SecureRandom.uuid,
@@ -263,14 +299,14 @@ def cmd_send(args)
   }
 
   # Try any already-queued messages first so delivery stays in order.
-  flush_outbox(peer, quiet: true)
+  flush_outbox(peer, cfg["token"], quiet: true)
 
-  if deliver(envelope, peer)
+  if deliver(envelope, peer, cfg["token"])
     puts "sent (#{type}) to #{peer} [#{envelope["id"]}] (#{body.bytesize} bytes)"
   else
     queue_outbox(envelope)
-    warn "agent_im: #{peer} unreachable right now — queued [#{envelope["id"]}]. " \
-         "It'll go out via `agent_im flush` or the next `agent_im watch` poll — nothing is lost."
+    warn "agent_008: #{peer} unreachable right now — queued [#{envelope["id"]}]. " \
+         "It'll go out via `agent_008 flush` or the next `agent_008 watch` poll — nothing is lost."
   end
 end
 
@@ -278,9 +314,9 @@ end
 
 def cmd_flush(_args)
   cfg = load_config
-  delivered = flush_outbox(cfg["peer"])
+  delivered = flush_outbox(cfg["peer"], cfg["token"])
   pending = File.exist?(OUTBOX_FILE) ? File.readlines(OUTBOX_FILE).size : 0
-  puts "agent_im flush: delivered #{delivered}, #{pending} still pending" if delivered.zero? || pending.positive?
+  puts "agent_008 flush: delivered #{delivered}, #{pending} still pending" if delivered.zero? || pending.positive?
 end
 
 def cmd_outbox(_args)
@@ -351,12 +387,12 @@ end
 
 def cmd_watch(_args)
   cfg = load_config
-  delivered = flush_outbox(cfg["peer"], quiet: true)
+  delivered = flush_outbox(cfg["peer"], cfg["token"], quiet: true)
   found = cmd_recv([])
   bits = []
   bits << "flushed #{delivered} queued" if delivered.positive?
   bits << (found ? "new messages above" : "nothing new")
-  puts "agent_im watch: #{bits.join(", ")}"
+  puts "agent_008 watch: #{bits.join(", ")}"
 end
 
 # --- chat --------------------------------------------------------------
@@ -368,7 +404,7 @@ end
 def cmd_chat(_args)
   cfg = load_config
   peer = cfg["peer"]
-  puts "agent_im chat: talking to #{peer} as '#{cfg["name"]}'. /quit to exit."
+  puts "agent_008 chat: talking to #{peer} as '#{cfg["name"]}'. /quit to exit."
 
   stop = false
   last_size = File.exist?(INBOX_FILE) ? File.readlines(INBOX_FILE).size : 0
@@ -402,8 +438,8 @@ def cmd_chat(_args)
 
     envelope = { "id" => SecureRandom.uuid, "from" => cfg["name"], "at" => Time.now.utc.iso8601,
                  "type" => "chat", "body" => line }
-    flush_outbox(peer, quiet: true)
-    unless deliver(envelope, peer)
+    flush_outbox(peer, cfg["token"], quiet: true)
+    unless deliver(envelope, peer, cfg["token"])
       queue_outbox(envelope)
       puts "  (#{peer} unreachable — queued, will retry)"
     end
@@ -411,49 +447,55 @@ def cmd_chat(_args)
 ensure
   stop = true
   tailer&.kill
-  puts "\nagent_im chat: bye"
+  puts "\nagent_008 chat: bye"
 end
 
 # --- main -------------------------------------------------------------------
 
 USAGE = <<~TXT
-  agent_im — instant messenger for agents, tunneled over Tailscale
+  agent_008 — instant messenger for agents, tunneled over Tailscale
 
   Usage:
-    agent_im init --peer <tailscale-host>[:port] [--port N] [--name NAME]
+    agent_008 init --peer <tailscale-host>[:port] [--port N] [--name NAME] [--token TOKEN]
         One-time setup: peer's Tailscale address, your listen port
-        (default #{DEFAULT_PORT}), your display name.
+        (default #{DEFAULT_PORT}), your display name, and a shared auth
+        token. Omit --token to generate one — share it with your peer out
+        of band, they pass the SAME value with --token on their `init`.
 
-    agent_im serve [--port N] [--bind IP]
+    agent_008 serve [--port N] [--bind IP]
         Starts the local mailbox server (foreground), bound only to your
-        Tailscale IP. Run continuously (nohup, tmux, or contrib/ service).
+        Tailscale IP, checking every request against the shared token. Run
+        continuously (nohup, tmux, or contrib/ service).
 
-    agent_im send ("<text>" | -) [--type message|patch|prompt]
-    agent_im send --patch <file>          # shorthand for --type patch
-    agent_im send --diff                  # shorthand: body = `git diff` here
+    agent_008 send ("<text>" | -) [--type message|patch|prompt]
+    agent_008 send --patch <file>          # shorthand for --type patch
+    agent_008 send --diff                  # shorthand: body = `git diff` here
         Sends to the configured peer. If the peer's unreachable right now,
         the message is queued to a local outbox instead of being dropped —
         it retries automatically on the next `send`, `flush`, or `watch`.
 
-    agent_im flush
+    agent_008 flush
         Retries everything in the outbox, in order, stopping at the first
         still-unreachable message (keeps delivery order intact).
 
-    agent_im outbox
+    agent_008 outbox
         Lists messages still waiting to be delivered.
 
-    agent_im recv [--all] [--json] [--save-patches DIR]
+    agent_008 recv [--all] [--json] [--save-patches DIR]
         Polls the LOCAL inbox (filled in by `serve`) for messages since you
         last checked — no network call, safe to run often. --save-patches
         writes any patch-typed message straight to a .patch file.
 
-    agent_im watch
+    agent_008 watch
         One poll pass for the /loop skill: flushes the outbox, then checks
         the inbox. Always exits 0.
-            /loop 1m /agent_im watch
+            /loop 1m /agent_008 watch
 
-  Config: ~/.agent_im/config.json
-  Inbox:  ~/.agent_im/inbox.jsonl    Outbox: ~/.agent_im/outbox.jsonl
+    agent_008 chat
+        Plain human-to-human REPL over the same tunnel.
+
+  Config: ~/.agent_008/config.json
+  Inbox:  ~/.agent_008/inbox.jsonl    Outbox: ~/.agent_008/outbox.jsonl
 TXT
 
 def main
@@ -466,9 +508,10 @@ def main
   when "outbox" then cmd_outbox(ARGV)
   when "recv" then cmd_recv(ARGV)
   when "watch" then cmd_watch(ARGV)
+  when "chat" then cmd_chat(ARGV)
   when "-h", "--help", "help", nil then puts USAGE
   else
-    die "unknown command '#{cmd}' — run: agent_im help"
+    die "unknown command '#{cmd}' — run: agent_008 help"
   end
 end
 

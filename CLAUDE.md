@@ -1,11 +1,12 @@
-# CLAUDE.md — agent_im self-install
+# CLAUDE.md — agent_008 self-install
 
 If you (an AI coding agent) have been pointed at this repo and asked to
-"set up agent_im" or "install this," work through the steps below in order.
-Each has a verification check — don't move to the next step until the
-current one's check passes. Full human-readable docs are in `README.md`;
-this file is the condensed, do-it-now version for an agent driving the
-install itself. Ask the user (don't guess) wherever a step says to.
+"set up agent_008" or "install this," work through the steps below in
+order. Each has a verification check — don't move to the next step until
+the current one's check passes. Full human-readable docs are in
+`README.md`; this file is the condensed, do-it-now version for an agent
+driving the install itself. Ask the user (don't guess) wherever a step says
+to.
 
 ## 0. Figure out the OS
 
@@ -48,56 +49,61 @@ on shell rc files, since non-interactive shells skip them.
 If you're not already running from a clone of this repo, clone it:
 `git clone https://github.com/Arawn-Davies/agent-008.git ~/agent-008`.
 
-Confirm `chmod +x ~/agent-008/bin/agent_im ~/agent-008/bin/agent_im_hook.py`
+Confirm `chmod +x ~/agent-008/bin/agent_008 ~/agent-008/bin/agent_008_hook.py`
 (should already be executable from git, verify with `git ls-files -s`).
 
 Add `~/agent-008/bin` to `PATH` in the user's shell rc file
 (`~/.bashrc`/`~/.zshrc`) if it isn't already.
 
-## 4. Configure agent_im
+## 4. Configure agent_008
 
-**Ask the user for:** the peer's Tailscale IP (from step 1) and what name
-they want to go by. Then:
+**Ask the user for:** the peer's Tailscale IP (from step 1), what name
+they want to go by, and **the shared auth token** — whichever of the two
+people sets up first should omit `--token` (one gets generated) and read
+it back out to share with the other person out of band; the second person
+passes that exact value with `--token`. Then:
 ```
-~/.rbenv/shims/ruby ~/agent-008/bin/agent_im init --peer <peer-ip>:8420 --name <name>
+~/.rbenv/shims/ruby ~/agent-008/bin/agent_008 init --peer <peer-ip>:8420 --name <name> [--token <shared-token>]
 ```
-Verify: `cat ~/.agent_im/config.json` shows the right peer/name.
+Verify: `cat ~/.agent_008/config.json` shows the right peer/name/token.
 
 ## 5. Start `serve`, persistently
 
-A foreground `agent_im serve` only lasts as long as the terminal does —
+A foreground `agent_008 serve` only lasts as long as the terminal does —
 install it as a real background service instead:
 
 - **Linux (systemd user service):**
   ```
   mkdir -p ~/.config/systemd/user
-  cp ~/agent-008/contrib/agent_im.service ~/.config/systemd/user/
-  systemctl --user enable --now agent_im
-  systemctl --user status agent_im   # verify: active (running)
+  cp ~/agent-008/contrib/agent_008.service ~/.config/systemd/user/
+  systemctl --user enable --now agent_008
+  systemctl --user status agent_008   # verify: active (running)
   ```
 
-- **macOS (launchd):** edit `~/agent-008/contrib/com.agentim.serve.plist`
+- **macOS (launchd):** edit `~/agent-008/contrib/com.agent008.serve.plist`
   first — replace every `/Users/YOURNAME` with the real home directory
   (plists don't expand `~`), and confirm the ruby path with
   `rbenv which ruby`. Then:
   ```
-  cp ~/agent-008/contrib/com.agentim.serve.plist ~/Library/LaunchAgents/
-  launchctl load ~/Library/LaunchAgents/com.agentim.serve.plist
-  launchctl list | grep com.agentim.serve   # verify it's listed
+  cp ~/agent-008/contrib/com.agent008.serve.plist ~/Library/LaunchAgents/
+  launchctl load ~/Library/LaunchAgents/com.agent008.serve.plist
+  launchctl list | grep com.agent008.serve   # verify it's listed
   ```
 
 Verify end-to-end: from the OTHER machine (or `--bind 127.0.0.1` locally
-for a quick self-test), `agent_im send "install check"` should succeed, and
-this machine's `agent_im recv` should show it.
+for a quick self-test), `agent_008 send "install check"` should succeed,
+and this machine's `agent_008 recv` should show it. If it fails with a 401,
+the two sides' `--token` values don't match — re-run `init` with the
+correct shared value.
 
 ## 6. Install the Claude Code integration (skill + hook)
 
-These make Claude Code itself use agent_im, not just the human on the CLI.
+These make Claude Code itself use agent_008, not just the human on the CLI.
 
 **Skill** — copy it into place:
 ```
-mkdir -p ~/.claude/skills/agentim
-cp ~/agent-008/claude-integration/SKILL.md ~/.claude/skills/agentim/SKILL.md
+mkdir -p ~/.claude/skills/agent008
+cp ~/agent-008/claude-integration/SKILL.md ~/.claude/skills/agent008/SKILL.md
 ```
 
 **Hook** — merge `claude-integration/hook-settings-snippet.json`'s `hooks`
@@ -107,7 +113,7 @@ array, append this hook's object to that array rather than replacing it.
 If `~/.claude/settings.json` doesn't exist yet, the snippet file can be
 copied as-is.
 
-Verify: `echo '{}' | python3 ~/agent-008/bin/agent_im_hook.py` should print
+Verify: `echo '{}' | python3 ~/agent-008/bin/agent_008_hook.py` should print
 nothing (no messages yet) without erroring.
 
 ## 7. Tell the user what's left
@@ -115,7 +121,7 @@ nothing (no messages yet) without erroring.
 You cannot do these — say so explicitly rather than trying:
 - If step 1's `tailscale up` login wasn't already done, it still needs
   doing.
-- Actually talking to their collaborator to exchange Tailscale IPs, if
-  that hasn't happened yet.
-- Starting a `/loop 1m /agent_im watch` session is a per-session choice,
+- Actually talking to their collaborator to exchange Tailscale IPs and the
+  shared token, if that hasn't happened yet.
+- Starting a `/loop 1m /agent_008 watch` session is a per-session choice,
   not part of install — mention it, don't start it unprompted.
