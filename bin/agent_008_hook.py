@@ -52,9 +52,19 @@ def main():
     if not messages:
         return
 
+    def render_body(m):
+        body = str(m.get("body", ""))
+        if m.get("type") == "patch":
+            # A diff can be huge -- don't dump it into auto-surfaced context.
+            # Just flag it's waiting; the agent pulls it out deliberately.
+            return f"(patch attached, {len(body)} bytes -- run `agent_008 recv --save-patches <dir>` to pull it out)"
+        if len(body) > 4000:
+            return body[:4000] + f"... [truncated, {len(body)} bytes total -- `agent_008 recv --all` for the full text]"
+        return body
+
     lines = [
         f"- [{m.get('type', 'message')}] from {m.get('from', '?')} at {m.get('at', '?')}: "
-        f"{str(m.get('body', ''))[:300]}"
+        f"{render_body(m)}"
         for m in messages
     ]
     context = (
